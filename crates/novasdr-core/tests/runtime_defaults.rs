@@ -41,6 +41,7 @@ fn runtime_defaults_use_configured_modulation() {
         updates: Updates::default(),
         receivers: vec![receiver],
         active_receiver_id: "rx0".to_string(),
+        black_ranges: vec![],
     };
     let rt = cfg.runtime().unwrap();
 
@@ -92,6 +93,7 @@ fn runtime_defaults_respect_configured_ssb_passband() {
         updates: Updates::default(),
         receivers: vec![receiver],
         active_receiver_id: "rx0".to_string(),
+        black_ranges: vec![],
     };
     let rt = cfg.runtime().unwrap();
 
