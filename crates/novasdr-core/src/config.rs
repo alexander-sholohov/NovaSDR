@@ -13,6 +13,7 @@ pub struct Config {
     pub updates: Updates,
     pub receivers: Vec<ReceiverConfig>,
     pub active_receiver_id: String,
+    pub black_ranges: Vec<(i64, i64)>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -404,6 +405,7 @@ fn write_json_atomic(path: &Path, value: &serde_json::Value) -> anyhow::Result<(
 #[derive(Debug, Clone, Deserialize)]
 struct ReceiversFile {
     pub receivers: Vec<ReceiverConfig>,
+    pub black_ranges: Vec<(i64, i64)>,
 }
 
 pub fn load_from_files(config_json: &Path, receivers_json: &Path) -> anyhow::Result<Config> {
@@ -478,6 +480,7 @@ pub fn load_from_files(config_json: &Path, receivers_json: &Path) -> anyhow::Res
         updates: global.updates,
         receivers: receivers.receivers,
         active_receiver_id: active_id,
+        black_ranges: receivers.black_ranges,
     })
 }
 

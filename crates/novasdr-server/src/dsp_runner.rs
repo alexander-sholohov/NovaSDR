@@ -127,6 +127,31 @@ fn run_dsp_loop(
         (rt.fft_size / 2) + 1
     };
 
+    let mut fft_ranges_to_black: Vec<(usize, Vec<Complex32>)> = Vec::new();
+    for (black_from, black_to) in state.cfg.black_ranges.iter() {
+        if *black_from < rt.basefreq + rt.sps && *black_to > rt.basefreq {
+            let spectrum_size = if rt.is_real {
+                (rt.fft_size / 2) as i64
+            } else {
+                rt.fft_size as i64
+            };
+            let l = (*black_from - rt.basefreq) * spectrum_size / rt.sps as i64;
+            let r = (*black_to - rt.basefreq) * spectrum_size / rt.sps as i64;
+            let l = l.max(0) as usize;
+            let r = r.min(spectrum_size) as usize;
+            if r > l {
+                let l = (l + base_idx) % rt.fft_size;
+                let r = (r + base_idx) % rt.fft_size;
+                if r > l {
+                    fft_ranges_to_black.push((l, vec![Complex32::new(0.0, 0.0); r - l]));
+                } else {
+                    fft_ranges_to_black.push((l, vec![Complex32::new(0.0, 0.0); rt.fft_size - l]));
+                    fft_ranges_to_black.push((0, vec![Complex32::new(0.0, 0.0); r]));
+                }
+            }
+        }
+    }
+
     let mut wf: Option<WaterfallOffload> = if use_waterfall_thread {
         let channels = spawn_waterfall_worker(state.clone(), receiver.clone())
             .context("spawn waterfall worker")?;
@@ -262,6 +287,7 @@ fn run_dsp_loop(
     }
 
     let mut audio_bins_buf: Vec<Complex32> = Vec::new();
+    let mut blacked_spectrum: Vec<Complex32> = Vec::new();
     loop {
         let waterfall_clients = receiver
             .waterfall_clients
@@ -285,7 +311,19 @@ fn run_dsp_loop(
             let include_waterfall_in_fft = want_waterfall && wf.is_none();
             let res = fft.execute(include_waterfall_in_fft)?;
 
-            let spectrum = fft.spectrum_for_audio();
+            let in_spectrum = fft.spectrum_for_audio();
+            let spectrum = if !fft_ranges_to_black.is_empty() {
+                blacked_spectrum.resize(in_spectrum.len(), Complex32::new(0.0, 0.0));
+                blacked_spectrum.copy_from_slice(in_spectrum);
+                for (from, black_block) in fft_ranges_to_black.iter() {
+                    let to = *from + black_block.len();
+                    blacked_spectrum.as_mut_slice()[*from..to]
+                        .copy_from_slice(black_block.as_slice());
+                }
+                blacked_spectrum.as_slice()
+            } else {
+                in_spectrum
+            };
             send_audio(
                 AudioSendContext {
                     state: &state,

@@ -33,6 +33,7 @@ fn websdr_register_url_default_is_present() {
             },
         }],
         active_receiver_id: "rx0".to_string(),
+        black_ranges: vec![],
     };
 
     assert!(cfg.websdr.register_online);
