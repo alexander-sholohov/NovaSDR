@@ -127,6 +127,32 @@ fn run_dsp_loop(
         (rt.fft_size / 2) + 1
     };
 
+    let mut fft_ranges_to_black: Vec<(usize, Vec<Complex32>)> = Vec::new();
+    for (black_from, black_to) in state.cfg.black_ranges.iter() {
+        let (spectrum, right_border) = if rt.is_real {
+            (rt.sps / 2, (rt.fft_size / 2) as i64)
+        } else {
+            (rt.sps, rt.fft_size as i64)
+        };
+        if *black_from < rt.basefreq + spectrum && *black_to > rt.basefreq {
+            let l = (*black_from - rt.basefreq) * right_border / spectrum;
+            let r = (*black_to - rt.basefreq) * right_border / spectrum;
+            let l = l.max(0) as usize;
+            let r = r.min(right_border) as usize;
+            if r > l {
+                let l = (l + base_idx) % rt.fft_size;
+                let r = (r + base_idx) % rt.fft_size;
+                if r > l {
+                    fft_ranges_to_black.push((l, vec![Complex32::new(0.0, 0.0); r - l]));
+                } else {
+                    fft_ranges_to_black.push((l, vec![Complex32::new(0.0, 0.0); rt.fft_size - l]));
+                    fft_ranges_to_black.push((0, vec![Complex32::new(0.0, 0.0); r]));
+                }
+            }
+        }
+    }
+    fft.set_ranges_to_black(fft_ranges_to_black)?;
+
     let mut wf: Option<WaterfallOffload> = if use_waterfall_thread {
         let channels = spawn_waterfall_worker(state.clone(), receiver.clone())
             .context("spawn waterfall worker")?;

@@ -155,13 +155,14 @@ fn ensure_setup() -> anyhow::Result<()> {
 
 pub struct ClfftComplexFft {
     n: usize,
-    _ctx: ClContext,
+    ctx: ClContext,
     queue: CommandQueue,
     buf: Buffer<f32>,
     plan: ffi::clfftPlanHandle,
     window_complex: Kernel,
     window_buf: Buffer<f32>,
     waterfall: WaterfallGpuQuantizer,
+    black_buf: Option<Buffer<f32>>,
 }
 
 impl ClfftComplexFft {
@@ -253,13 +254,14 @@ impl ClfftComplexFft {
 
         Ok(Self {
             n,
-            _ctx: ctx,
+            ctx,
             queue,
             buf,
             plan,
             window_complex,
             window_buf,
             waterfall,
+            black_buf: None,
         })
     }
 
@@ -310,6 +312,43 @@ impl ClfftComplexFft {
             st == ffi::clfftStatus::CLFFT_SUCCESS,
             "clfftEnqueueTransform failed: {st:?}"
         );
+
+        Ok(())
+    }
+
+    pub fn set_black_window(&mut self, black_window: &[f32]) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            black_window.len() == self.n,
+            "set_black_window length mismatch"
+        );
+
+        let mut black_window_buf = unsafe {
+            Buffer::<f32>::create(&self.ctx, CL_MEM_READ_WRITE, self.n, std::ptr::null_mut())
+        }
+        .context("create OpenCL black_window buffer")?;
+        unsafe {
+            self.queue
+                .enqueue_write_buffer(&mut black_window_buf, CL_BLOCKING, 0, black_window, &[])
+                .context("OpenCL write window")?;
+        }
+        self.black_buf = Some(black_window_buf);
+
+        Ok(())
+    }
+
+    pub fn make_black_window_inplace(&mut self) -> anyhow::Result<()> {
+        if let Some(black_buf) = self.black_buf.as_ref() {
+            let offset0: cl_int = 0;
+            unsafe {
+                ExecuteKernel::new(&self.window_complex)
+                    .set_arg(&self.buf)
+                    .set_arg(&offset0)
+                    .set_arg(&self.buf)
+                    .set_arg(black_buf)
+                    .set_global_work_size(self.n)
+                    .enqueue_nd_range(&self.queue)?;
+            }
+        }
 
         Ok(())
     }
@@ -617,9 +656,10 @@ impl WaterfallGpuQuantizer {
 
 pub struct ClfftRealFft {
     n: usize,
-    _ctx: ClContext,
+    ctx: ClContext,
     queue: CommandQueue,
     window_real: Kernel,
+    window_complex: Kernel,
     window_buf: Buffer<f32>,
     half_a_buf: Buffer<f32>,
     half_b_buf: Buffer<f32>,
@@ -627,6 +667,7 @@ pub struct ClfftRealFft {
     out_buf: Buffer<f32>,
     waterfall: WaterfallGpuQuantizer,
     plan: ffi::clfftPlanHandle,
+    black_buf_real: Option<Buffer<f32>>,
 }
 
 impl ClfftRealFft {
@@ -648,6 +689,8 @@ impl ClfftRealFft {
         let program = Program::create_and_build_from_source(&ctx, WATERFALL_OPENCL_KERNELS, "")
             .map_err(|e| anyhow::anyhow!("build OpenCL program: {e}"))?;
         let window_real = Kernel::create(&program, "window_real").context("kernel window_real")?;
+        let window_complex =
+            Kernel::create(&program, "window_complex").context("kernel window_complex")?;
 
         let mut window_buf =
             unsafe { Buffer::<f32>::create(&ctx, CL_MEM_READ_WRITE, n, std::ptr::null_mut()) }
@@ -740,9 +783,10 @@ impl ClfftRealFft {
 
         Ok(Self {
             n,
-            _ctx: ctx,
+            ctx,
             queue,
             window_real,
+            window_complex,
             window_buf,
             half_a_buf,
             half_b_buf,
@@ -750,6 +794,7 @@ impl ClfftRealFft {
             out_buf,
             waterfall,
             plan,
+            black_buf_real: None,
         })
     }
 
@@ -823,6 +868,8 @@ impl ClfftRealFft {
             "clfftEnqueueTransform failed: {st:?}"
         );
 
+        self.make_black_window_inplace_real()?;
+
         let out_interleaved = complex_as_f32_slice_mut(output);
         unsafe {
             self.queue
@@ -851,6 +898,44 @@ impl ClfftRealFft {
                 normalize,
             },
         )
+    }
+
+    pub fn set_black_window_real(&mut self, black_window: &[f32]) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            black_window.len() == (self.n / 2) + 1,
+            "set_black_window_real black_window length mismatch"
+        );
+
+        let mut black_window_buf = unsafe {
+            Buffer::<f32>::create(&self.ctx, CL_MEM_READ_WRITE, self.n, std::ptr::null_mut())
+        }
+        .context("create OpenCL black_window buffer")?;
+        unsafe {
+            self.queue
+                .enqueue_write_buffer(&mut black_window_buf, CL_BLOCKING, 0, black_window, &[])
+                .context("OpenCL write window")?;
+        }
+        self.black_buf_real = Some(black_window_buf);
+
+        Ok(())
+    }
+
+    pub fn make_black_window_inplace_real(&mut self) -> anyhow::Result<()> {
+        if let Some(black_buf) = self.black_buf_real.as_ref() {
+            let offset0: cl_int = 0;
+            let complex_len = self.n / 2 + 1;
+            unsafe {
+                ExecuteKernel::new(&self.window_complex)
+                    .set_arg(&self.out_buf)
+                    .set_arg(&offset0)
+                    .set_arg(&self.out_buf)
+                    .set_arg(black_buf)
+                    .set_global_work_size(complex_len)
+                    .enqueue_nd_range(&self.queue)?;
+            }
+        }
+
+        Ok(())
     }
 }
 

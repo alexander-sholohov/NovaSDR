@@ -40,6 +40,7 @@ fn base_config(signal: SignalType) -> Config {
         updates: Updates::default(),
         receivers: vec![receiver],
         active_receiver_id: "rx0".to_string(),
+        black_ranges: vec![],
     }
 }
 

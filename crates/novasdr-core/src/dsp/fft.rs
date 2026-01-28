@@ -40,6 +40,7 @@ pub struct FftEngine {
     complex_half_b: Vec<Complex32>,
     real_half_a: Vec<f32>,
     real_half_b: Vec<f32>,
+    fft_ranges_to_black: Vec<(usize, Vec<Complex32>)>,
 }
 
 enum ComplexFft {
@@ -158,6 +159,7 @@ impl FftEngine {
             complex_half_b: vec![Complex32::new(0.0, 0.0); fft_size / 2],
             real_half_a: vec![0.0; fft_size / 2],
             real_half_b: vec![0.0; fft_size / 2],
+            fft_ranges_to_black: vec![],
         })
     }
 
@@ -229,6 +231,7 @@ impl FftEngine {
                     &mut self.real_scratch,
                 )
                 .context("real fft")?;
+            apply_black_ranges(&self.fft_ranges_to_black, &mut self.real_spectrum_full);
         }
 
         // Normalize by N to keep the output scale consistent across FFT backends.
@@ -312,6 +315,7 @@ impl FftEngine {
 
                 let gpu_res: anyhow::Result<FftResult> = (|| {
                     fft.window_and_process_inplace(&self.complex_frame)?;
+                    fft.make_black_window_inplace()?;
 
                     let (quantized_concat, quantized_level_offsets) = if include_waterfall {
                         let (q, o) = fft.quantize_and_downsample(
@@ -412,6 +416,7 @@ impl FftEngine {
             self.complex_frame[i + half] = self.complex_half_b[i] * self.window[i + half];
         }
         self.complex_fft.process(&mut self.complex_frame)?;
+        apply_black_ranges(&self.fft_ranges_to_black, &mut self.complex_frame);
 
         let (quantized_concat, offsets) = if include_waterfall {
             let (q, o) = quantize_and_downsample_cpu(
@@ -431,6 +436,51 @@ impl FftEngine {
             quantized_concat,
             quantized_level_offsets: offsets,
         })
+    }
+
+    pub fn set_ranges_to_black(
+        &mut self,
+        fft_ranges_to_black: Vec<(usize, Vec<Complex32>)>,
+    ) -> anyhow::Result<()> {
+        self.fft_ranges_to_black = fft_ranges_to_black;
+
+        #[cfg(feature = "clfft")]
+        {
+            let black_window_complex = {
+                let mut black_window: Vec<Complex32> =
+                    vec![Complex32::new(1.0, 1.0); self.settings.fft_size];
+                apply_black_ranges(&self.fft_ranges_to_black, &mut black_window);
+                black_window
+            };
+
+            if let ComplexFft::Clfft(fft) = &mut self.complex_fft {
+                let mut black_window: Vec<f32> = vec![0.0; self.settings.fft_size];
+                for (x, y) in black_window.iter_mut().zip(black_window_complex.iter()) {
+                    *x = y.re;
+                }
+
+                fft.set_black_window(&black_window)?;
+            }
+
+            if let Some(clfft) = self.clfft_real.as_mut() {
+                let comlex_len = self.settings.fft_size / 2 + 1;
+                let mut black_window: Vec<f32> = vec![0.0; comlex_len];
+                for (x, y) in black_window.iter_mut().zip(black_window_complex.iter()) {
+                    *x = y.re;
+                }
+
+                clfft.set_black_window_real(&black_window)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn apply_black_ranges(fft_ranges_to_black: &Vec<(usize, Vec<Complex32>)>, data: &mut [Complex32]) {
+    for (from, black_block) in fft_ranges_to_black.iter() {
+        let to = *from + black_block.len();
+        data[*from..to].copy_from_slice(black_block.as_slice());
     }
 }
 
