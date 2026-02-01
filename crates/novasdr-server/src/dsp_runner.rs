@@ -151,7 +151,9 @@ fn run_dsp_loop(
             }
         }
     }
-    fft.set_ranges_to_black(fft_ranges_to_black)?;
+    if !fft_ranges_to_black.is_empty() {
+        fft.set_ranges_to_black(fft_ranges_to_black)?;
+    }
 
     let mut wf: Option<WaterfallOffload> = if use_waterfall_thread {
         let channels = spawn_waterfall_worker(state.clone(), receiver.clone())
