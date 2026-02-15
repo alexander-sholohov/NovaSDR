@@ -70,6 +70,7 @@ jobs:
             soapysdr-tools \
             ocl-icd-opencl-dev \
             libclfft-dev \
+            libopus-dev \
           || true
 
           # If libclfft-dev isn't available on the runner image, build clFFT from source so the
@@ -210,6 +211,7 @@ jobs:
               apt-get install -y --no-install-recommends \
                 ocl-icd-opencl-dev \
                 libclfft-dev \
+                libopus-dev \
               || true
 
               # Build SoapySDR from source for build-time linking (we do not ship/bundle it).

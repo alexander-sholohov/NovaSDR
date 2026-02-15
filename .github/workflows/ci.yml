@@ -51,6 +51,7 @@ jobs:
             libclang-dev \
             ocl-icd-opencl-dev \
             libclfft-dev \
+            libopus-dev \
           || true
 
           # Some runner images may not ship libclfft-dev. Fall back to building from source so the
