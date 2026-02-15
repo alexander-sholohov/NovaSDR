@@ -65,11 +65,22 @@ jobs:
             sudo ldconfig || true
           fi
 
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: C:\vcpkg\vcpkg install opus --vcpkg-root C:\vcpkg
+
       - name: Format
         run: cargo fmt --check
 
       - name: Test
+        if: runner.os == 'Linux'
         run: cargo test
+
+      - name: Test
+        if: runner.os == 'Windows'
+        run: |
+          $env:VCPKG_ROOT="C:\vcpkg"
+          cargo test
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings

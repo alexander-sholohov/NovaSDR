@@ -84,6 +84,10 @@ jobs:
             sudo ldconfig || true
           fi
 
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: C:\vcpkg\vcpkg install opus --vcpkg-root C:\vcpkg
+
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         shell: bash
@@ -105,6 +109,7 @@ jobs:
           if [[ -n "${{ inputs.tag }}" ]]; then TAG="${{ inputs.tag }}"; fi
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
+            set VCPKG_ROOT="C:\vcpkg"
             cargo build -p novasdr-server --release
             exit 0
           fi
