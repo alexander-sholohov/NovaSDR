@@ -58,6 +58,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # The frontend is a git submodule and ships with prebuilt artifacts in frontend/dist/.
 
+      - name: Set optional environment variables (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=C:\vcpkg\"
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -84,17 +89,17 @@ jobs:
             sudo ldconfig || true
           fi
 
-      - name: Install system dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: C:\vcpkg\vcpkg install opus --vcpkg-root C:\vcpkg
-
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
           brew update
-          brew install pkg-config soapysdr
+          brew install pkg-config soapysdr opus
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: C:\vcpkg\vcpkg install opus --vcpkg-root C:\vcpkg
 
       - name: Verify frontend/dist exists
         shell: bash
@@ -109,7 +114,6 @@ jobs:
           if [[ -n "${{ inputs.tag }}" ]]; then TAG="${{ inputs.tag }}"; fi
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            set VCPKG_ROOT="C:\vcpkg"
             cargo build -p novasdr-server --release
             exit 0
           fi

@@ -37,6 +37,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Set optional environment variables (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=C:\vcpkg\"
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -73,14 +78,7 @@ jobs:
         run: cargo fmt --check
 
       - name: Test
-        if: runner.os == 'Linux'
         run: cargo test
-
-      - name: Test
-        if: runner.os == 'Windows'
-        run: |
-          $env:VCPKG_ROOT="C:\vcpkg"
-          cargo test
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
