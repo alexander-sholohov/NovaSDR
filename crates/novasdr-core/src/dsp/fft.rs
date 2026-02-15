@@ -477,7 +477,7 @@ impl FftEngine {
     }
 }
 
-fn apply_black_ranges(fft_ranges_to_black: &Vec<(usize, Vec<Complex32>)>, data: &mut [Complex32]) {
+fn apply_black_ranges(fft_ranges_to_black: &[(usize, Vec<Complex32>)], data: &mut [Complex32]) {
     for (from, black_block) in fft_ranges_to_black.iter() {
         let to = *from + black_block.len();
         data[*from..to].copy_from_slice(black_block.as_slice());
