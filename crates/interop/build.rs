@@ -14,6 +14,36 @@ fn probe_opus_pkg_config() -> Option<Vec<PathBuf>> {
     }
 }
 
+fn probe_opus_path_patch(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    // MacOs homebrew Opus specific patch
+    // we get path like /opt/homebrew/Cellar/opus/1.6.1/include/opus ,
+    // but it should be /opt/homebrew/Cellar/opus/1.6.1/include
+
+    for path in paths.iter() {
+        if path.join("opus/opus.h").exists() {
+            return paths;
+        }
+    }
+
+    let mut op_extra_path: Option<PathBuf> = None;
+    for path in paths.iter() {
+        if let Some(parent) = path.parent() {
+            if parent.join("opus/opus.h").exists() {
+                op_extra_path = Some(parent.into());
+                break;
+            }
+        }
+    }
+
+    let Some(extra_path) = op_extra_path else {
+        return paths;
+    };
+
+    let mut paths = paths;
+    paths.push(extra_path);
+    paths
+}
+
 fn do_opus() {
     println!("cargo:rerun-if-changed=./interop/opus_wrapper.h");
     println!("cargo:rerun-if-changed=./interop/opus_wrapper.c");
@@ -25,7 +55,8 @@ fn do_opus() {
             .expect("cant't find opus package");
         pkg.include_paths
     } else {
-        probe_opus_pkg_config().expect("Couldn't find opus")
+        let path = probe_opus_pkg_config().expect("Couldn't find opus");
+        probe_opus_path_patch(path)
     };
 
     let bindgen_builder = bindgen::Builder::default()
