@@ -4,6 +4,7 @@ members = [
   "crates/novasdr-core",
   "crates/novasdr-server",
   "crates/ws_probe",
+  "crates/interop",
 ]
 
 [workspace.package]

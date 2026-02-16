@@ -58,6 +58,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       # The frontend is a git submodule and ships with prebuilt artifacts in frontend/dist/.
 
+      - name: Set optional environment variables (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=C:\vcpkg\"
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -70,6 +75,7 @@ jobs:
             soapysdr-tools \
             ocl-icd-opencl-dev \
             libclfft-dev \
+            libopus-dev \
           || true
 
           # If libclfft-dev isn't available on the runner image, build clFFT from source so the
@@ -89,7 +95,11 @@ jobs:
         run: |
           set -euo pipefail
           brew update
-          brew install pkg-config soapysdr
+          brew install pkg-config soapysdr opus
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: C:\vcpkg\vcpkg install opus --vcpkg-root C:\vcpkg
 
       - name: Verify frontend/dist exists
         shell: bash
@@ -210,6 +220,7 @@ jobs:
               apt-get install -y --no-install-recommends \
                 ocl-icd-opencl-dev \
                 libclfft-dev \
+                libopus-dev \
               || true
 
               # Build SoapySDR from source for build-time linking (we do not ship/bundle it).

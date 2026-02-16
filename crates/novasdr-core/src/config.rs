@@ -212,6 +212,7 @@ pub enum WaterfallCompression {
 pub enum AudioCompression {
     Adpcm,
     Flac,
+    Opus,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Default)]
@@ -655,6 +656,7 @@ impl Config {
         let audio_compression_str = match input.audio_compression {
             AudioCompression::Adpcm => "adpcm".to_string(),
             AudioCompression::Flac => "flac".to_string(),
+            AudioCompression::Opus => "opus".to_string(),
         };
 
         Ok(Runtime {

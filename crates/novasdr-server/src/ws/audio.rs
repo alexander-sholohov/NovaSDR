@@ -6,6 +6,7 @@ use axum::{
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
+use interop::opus;
 use novasdr_core::{
     config::AudioCompression,
     dsp::{
@@ -22,8 +23,8 @@ use num_complex::Complex32;
 use realfft::{ComplexToReal, RealFftPlanner};
 use rustfft::{Fft as RustFft, FftPlanner};
 use serde_json::json;
-use std::net::SocketAddr;
 use std::sync::Arc;
+use std::{mem, net::SocketAddr};
 
 fn with_audio_unique_id(basic_info: String, unique_id: &str) -> String {
     let Ok(mut v) = serde_json::from_str::<serde_json::Value>(&basic_info) else {
@@ -113,25 +114,30 @@ fn squelch_features(bins: &[Complex32]) -> SquelchFeatures {
 }
 
 const AUDIO_FRAME_MAGIC: [u8; 4] = *b"NSDA";
-const AUDIO_FRAME_VERSION: u8 = 1;
-const AUDIO_FRAME_HEADER_LEN: usize = 36;
+const AUDIO_FRAME_END_MARK: u16 = 0xaabb;
+const AUDIO_FRAME_VERSION: u8 = 2;
+const AUDIO_FRAME_HEADER_LEN: usize = 40;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 enum AudioWireCodec {
     AdpcmIma = 1,
+    Opus = 2,
 }
 
-fn build_audio_frame(
+fn build_audio_frame_multi(
     codec: AudioWireCodec,
     frame_num: u64,
     l: i32,
     m: f64,
     r: i32,
     pwr: f32,
-    payload: &[u8],
+    payload: Vec<Vec<u8>>,
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(AUDIO_FRAME_HEADER_LEN + payload.len());
+    let expected_capacity = payload
+        .iter()
+        .fold(AUDIO_FRAME_HEADER_LEN, |acc, x| acc + 2 + x.len());
+    let mut out = Vec::with_capacity(expected_capacity);
     out.extend_from_slice(&AUDIO_FRAME_MAGIC);
     out.push(AUDIO_FRAME_VERSION);
     out.push(codec as u8);
@@ -141,7 +147,13 @@ fn build_audio_frame(
     out.extend_from_slice(&m.to_le_bytes());
     out.extend_from_slice(&r.to_le_bytes());
     out.extend_from_slice(&pwr.to_le_bytes());
-    out.extend_from_slice(payload);
+    out.extend_from_slice(&(payload.len() as u16).to_le_bytes());
+    for frame in payload {
+        out.extend_from_slice(&(frame.len() as u16).to_le_bytes());
+        out.extend(frame);
+    }
+    out.extend_from_slice(&AUDIO_FRAME_END_MARK.to_le_bytes());
+    debug_assert_eq!(expected_capacity, out.len());
     out
 }
 
@@ -807,13 +819,13 @@ pub struct AudioPipeline {
     pcm_accum_i16: Vec<i16>,
     pcm_accum_offset: usize,
     packet_samples: usize,
-    pwr_sum: f32,
-    pwr_frames: usize,
     dc: DcBlocker,
     agc: Agc,
     fm_prev: Complex32,
     last_agc: (AgcSpeed, Option<f32>, Option<f32>),
     squelch: SquelchState,
+    opus_encoder: Option<opus::Encoder>,
+    opus_wrk_buf: Vec<u8>,
 }
 
 impl AudioPipeline {
@@ -831,13 +843,61 @@ impl AudioPipeline {
 
         let frame_samples = audio_fft_size / 2;
 
-        // Batch ~20ms of PCM per websocket frame to reduce packet rate and browser-side scheduling
-        // overhead (too many tiny frames can stutter).
-        let target_packet_sec = 0.020_f64;
-        let min_packet = ((sample_rate as f64) * target_packet_sec).ceil().max(1.0) as usize;
-        let mut packet_samples = frame_samples.max(min_packet);
-        packet_samples = packet_samples.div_ceil(8) * 8;
-        packet_samples = packet_samples.clamp(frame_samples, 8192);
+        let packet_samples = match compression {
+            AudioCompression::Adpcm => {
+                // Batch ~20ms of PCM per websocket frame to reduce packet rate and browser-side scheduling
+                // overhead (too many tiny frames can stutter).
+                let target_packet_sec = 0.020_f64;
+                let min_packet =
+                    ((sample_rate as f64) * target_packet_sec).ceil().max(1.0) as usize;
+                let mut packet_samples = frame_samples.max(min_packet);
+                packet_samples = packet_samples.div_ceil(8) * 8;
+                packet_samples.clamp(frame_samples, 8192)
+            }
+            AudioCompression::Opus => {
+                // number of milliseconds per chunk. opus allowed values: 5, 10, 20, 40, 60.
+                let ms = 20;
+                sample_rate * ms / 1000
+            }
+            AudioCompression::Flac => {
+                return Err(anyhow::anyhow!(
+                    "FLAC audio was removed; configure audio_compression = \"opus\" or \"adpcm\""
+                ))
+            }
+        };
+
+        let (opus_encoder, opus_wrk_buf) = if compression == AudioCompression::Opus {
+            let opus_sample_rate = match sample_rate {
+                8000 => opus::SampleRate::Hz8000,
+                12000 => opus::SampleRate::Hz12000,
+                16000 => opus::SampleRate::Hz16000,
+                24000 => opus::SampleRate::Hz24000,
+                48000 => opus::SampleRate::Hz48000,
+                x => return Err(anyhow::anyhow!("Unsupported sample rate {x} for Opus codec. Valid values are: [8000, 12000, 16000, 24000, 48000]")),
+            };
+
+            let mut opus_encoder = opus::Encoder::new(
+                opus_sample_rate,
+                opus::Channels::Mono,
+                opus::Application::LowDelay,
+            )
+            .map_err(|e| anyhow::anyhow!("Opus create error: {e}"))?;
+
+            // 40kbps Opus produces excellent quality for VoIP needs.
+            if let Err(e) = opus_encoder.set_bitrate(opus::Bitrate::BitsPerSecond(40000)) {
+                tracing::warn!(error = ?e, "opus. unsuccess set_bitrate");
+            }
+
+            if let Err(e) = opus_encoder.set_complexity(2) {
+                tracing::warn!(error = ?e, "opus. unsuccess set_complexity");
+            }
+
+            // 120ms with 48000sps, doubled. More than enough for Opus encoder output buffer.
+            let max_wrk_buf_size = 120 * 48000 * 2 / 1000;
+            (Some(opus_encoder), vec![0; max_wrk_buf_size])
+        } else {
+            (None, vec![])
+        };
 
         Ok(Self {
             compression,
@@ -858,8 +918,6 @@ impl AudioPipeline {
             pcm_accum_i16: Vec::with_capacity(packet_samples * 4),
             pcm_accum_offset: 0,
             packet_samples,
-            pwr_sum: 0.0,
-            pwr_frames: 0,
             // Keep the DC blocker cutoff low so AM has real low end; bass boost is frontend-only.
             dc: DcBlocker::new((sample_rate / 20).max(128)),
             // Match reference defaults.
@@ -867,6 +925,8 @@ impl AudioPipeline {
             fm_prev: Complex32::new(0.0, 0.0),
             last_agc: (AgcSpeed::Default, None, None),
             squelch: SquelchState::new(),
+            opus_encoder,
+            opus_wrk_buf,
         })
     }
 
@@ -883,8 +943,6 @@ impl AudioPipeline {
         self.agc.reset();
         self.pcm_accum_i16.clear();
         self.pcm_accum_offset = 0;
-        self.pwr_sum = 0.0;
-        self.pwr_frames = 0;
     }
 
     pub fn process(
@@ -1069,15 +1127,15 @@ impl AudioPipeline {
 
         float_to_i16_centered(audio_out, &mut self.pcm_frame_i16, 32768.0);
         self.pcm_accum_i16.extend_from_slice(&self.pcm_frame_i16);
-        self.pwr_sum += spectrum_slice.iter().map(|c| c.norm_sqr()).sum::<f32>();
-        self.pwr_frames += 1;
+        let pwr = spectrum_slice.iter().map(|c| c.norm_sqr()).sum::<f32>();
 
-        if self.compression != AudioCompression::Adpcm {
-            return Err(anyhow::anyhow!(
-                "FLAC audio was removed; configure audio_compression = \"adpcm\""
-            ));
-        }
+        let audio_wire_codec = match self.compression {
+            AudioCompression::Adpcm => AudioWireCodec::AdpcmIma,
+            AudioCompression::Opus => AudioWireCodec::Opus,
+            AudioCompression::Flac => unreachable!(),
+        };
 
+        let mut acc_frames: Vec<Vec<u8>> = Vec::new();
         loop {
             let available = self
                 .pcm_accum_i16
@@ -1091,27 +1149,55 @@ impl AudioPipeline {
             let block = &self.pcm_accum_i16[self.pcm_accum_offset..end];
             self.pcm_accum_offset = end;
 
-            let frames = self.pwr_frames.max(1) as f32;
-            let pwr = self.pwr_sum / frames;
-            self.pwr_sum = 0.0;
-            self.pwr_frames = 0;
+            let payload = match self.compression {
+                AudioCompression::Adpcm => ima_adpcm::encode_block_i16_mono(block),
+                AudioCompression::Opus => {
+                    let Some(opus_encoder) = self.opus_encoder.as_ref() else {
+                        return Err(anyhow::anyhow!("Opus encoder is None. Impossible."));
+                    };
+                    let size = opus_encoder
+                        .encode(block, &mut self.opus_wrk_buf)
+                        .map_err(|e| anyhow::anyhow!("Opus encode chunk error: {e}"))?;
+                    self.opus_wrk_buf[0..size].to_vec()
+                }
+                AudioCompression::Flac => unreachable!(),
+            };
 
-            let payload = ima_adpcm::encode_block_i16_mono(block);
-            out_packets.push(build_audio_frame(
-                AudioWireCodec::AdpcmIma,
-                frame_num,
-                0,
-                params.m,
-                spectrum_slice.len() as i32,
-                pwr,
-                &payload,
-            ));
+            let audio_frame_size_threshold = 700; // keep frame size less than N bytes if possible
+            let collected = acc_frames.iter().map(|x| x.len()).sum::<usize>();
+            if collected + payload.len() > audio_frame_size_threshold {
+                let taken_vec = mem::replace(&mut acc_frames, vec![payload]);
+                out_packets.push(build_audio_frame_multi(
+                    audio_wire_codec,
+                    frame_num,
+                    0,
+                    params.m,
+                    spectrum_slice.len() as i32,
+                    pwr,
+                    taken_vec,
+                ));
+            } else {
+                acc_frames.push(payload);
+            }
 
             if self.pcm_accum_offset >= self.packet_samples * 4 {
                 self.pcm_accum_i16.drain(0..self.pcm_accum_offset);
                 self.pcm_accum_offset = 0;
             }
         }
+
+        if !acc_frames.is_empty() {
+            out_packets.push(build_audio_frame_multi(
+                audio_wire_codec,
+                frame_num,
+                0,
+                params.m,
+                spectrum_slice.len() as i32,
+                pwr,
+                acc_frames,
+            ));
+        }
+
         Ok(out_packets)
     }
 

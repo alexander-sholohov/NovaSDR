@@ -1,0 +1,19 @@
+[package]
+name = "interop"
+version = "0.1.0"
+edition = "2021"
+authors = ["Alexander Sholokhov <ra9yer@yahoo.com>"]
+keywords = ["ffi", "sdr"]
+build = "build.rs"
+license = "GPL-3.0-only"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+[build-dependencies]
+bindgen = { version = "0.66.1", default-features = false, features = ["runtime"] }
+cc = "1.0"
+pkg-config = "0.3.9"
+vcpkg = "0.2.15"
+

@@ -1,5 +1,6 @@
 mod app;
 mod banner;
+mod benchmark;
 mod build_info;
 mod cli;
 mod dsp_runner;
@@ -14,6 +15,7 @@ mod update_check;
 mod ws;
 
 use anyhow::Context;
+use interop::opus;
 use novasdr_core::config;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -76,11 +78,15 @@ fn main() -> anyhow::Result<()> {
     let matches = cmd.get_matches();
     let args = cli::Args::from_arg_matches(&matches).context("parse args")?;
 
-    if matches!(
-        args.command,
-        Some(cli::Command::Setup) | Some(cli::Command::Configure)
-    ) {
-        return run_setup(&args, setup::RunMode::Explicit);
+    match args.command {
+        Some(cli::Command::Setup) => return run_setup(&args, setup::RunMode::Explicit),
+        Some(cli::Command::Configure) => return run_setup(&args, setup::RunMode::Explicit),
+        Some(cli::Command::Benchmark {
+            kind,
+            iterations,
+            fftsize,
+        }) => return benchmark::run_benchmark(kind, iterations, fftsize),
+        None => {}
     }
 
     let config_source = matches.value_source("config");
@@ -243,6 +249,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+
+    tracing::info!(
+        version = opus::get_version_string().unwrap_or_default(),
+        "Opus"
+    );
 
     let available_threads = std::thread::available_parallelism()
         .map(|n| n.get())
