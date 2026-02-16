@@ -1087,6 +1087,20 @@ fn edit_receiver(receiver: &mut Value) -> anyhow::Result<()> {
     )?;
     input.insert("audio_sps".to_string(), json!(audio_sps));
 
+    {
+        let current = input
+            .get("audio_compression")
+            .and_then(Value::as_str)
+            .unwrap_or("adpcm");
+        let labels = vec!["opus".to_string(), "adpcm".to_string()];
+        let default_idx = labels.iter().position(|s| s == current).unwrap_or(0);
+        let selected = Select::new("Audio compression", labels)
+            .with_starting_cursor(default_idx)
+            .prompt()
+            .context("prompt audio compression")?;
+        input.insert("audio_compression".to_string(), json!(selected));
+    }
+
     let waterfall_size = prompt_usize(
         "Waterfall width (waterfall_size)",
         input
