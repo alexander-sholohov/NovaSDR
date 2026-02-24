@@ -15,6 +15,7 @@ mod update_check;
 mod ws;
 
 use anyhow::Context;
+use interop::opus;
 use novasdr_core::config;
 use std::io::IsTerminal;
 use std::path::Path;
@@ -248,6 +249,11 @@ fn main() -> anyhow::Result<()> {
             }
         }
     }
+
+    tracing::info!(
+        version = opus::get_version_string().unwrap_or_default(),
+        "Opus"
+    );
 
     let available_threads = std::thread::available_parallelism()
         .map(|n| n.get())

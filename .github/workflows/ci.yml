@@ -37,6 +37,11 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Set optional environment variables (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_ENV -Value "VCPKG_ROOT=C:\vcpkg\"
+
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         shell: bash
@@ -51,6 +56,7 @@ jobs:
             libclang-dev \
             ocl-icd-opencl-dev \
             libclfft-dev \
+            libopus-dev \
           || true
 
           # Some runner images may not ship libclfft-dev. Fall back to building from source so the
@@ -63,6 +69,10 @@ jobs:
             sudo cmake --install /tmp/clfft/build
             sudo ldconfig || true
           fi
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: C:\vcpkg\vcpkg install opus --vcpkg-root C:\vcpkg
 
       - name: Format
         run: cargo fmt --check

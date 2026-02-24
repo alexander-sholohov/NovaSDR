@@ -63,7 +63,8 @@ sudo apt-get update && sudo apt-get install -y --no-install-recommends \
   nodejs npm \
   ocl-icd-opencl-dev ocl-icd-libopencl1 \
   libclfft-dev \
-  libusb-1.0-0-dev
+  libusb-1.0-0-dev \
+  libopus-dev
 ```
 
 </details>
@@ -79,7 +80,8 @@ sudo dnf install -y \
   swig python3 python3-devel python3-numpy \
   nodejs npm \
   ocl-icd ocl-icd-devel \
-  libusb1-devel
+  libusb1-devel \
+  opus-devel
 ```
 
 </details>
@@ -95,7 +97,8 @@ sudo pacman -Sy --noconfirm --needed \
   swig python python-numpy \
   nodejs npm \
   ocl-icd opencl-headers \
-  libusb
+  libusb \
+  opus
 ```
 
 </details>
@@ -111,7 +114,8 @@ sudo zypper --non-interactive refresh && sudo zypper --non-interactive install -
   swig python3 python3-devel python3-numpy \
   nodejs npm \
   OpenCL-Headers ocl-icd-devel \
-  libusb-1_0-devel
+  libusb-1_0-devel \
+  libopus-devel
 ```
 
 </details>
@@ -125,7 +129,8 @@ brew update && brew install \
   llvm \
   swig python \
   node \
-  libusb
+  libusb \
+  opus
 ```
 
 </details>
