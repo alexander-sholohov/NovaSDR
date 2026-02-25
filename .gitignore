@@ -15,6 +15,7 @@ subprojects/*/*
 *.wav
 *.txt
 *.bak
+*.lock
 
 node_modules/
 .vscode
