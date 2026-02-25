@@ -14,6 +14,10 @@ NovaSDR is a WebSDR server that streams **waterfall/spectrum** and **demodulated
 - **Codecs**: waterfall `zstd`, audio `flac`
 - **Transport**: WebSockets for real-time streams + HTTP for static UI
 
+## Showcase
+
+![NovaSDR Showcase](docs/showcase.png)
+
 ## What this repository contains
 
 - `crates/novasdr-server/`: server, WebSocket endpoints, DSP runner

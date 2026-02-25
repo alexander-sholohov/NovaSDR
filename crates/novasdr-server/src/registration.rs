@@ -8,18 +8,25 @@ const UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 const BACKOFF_BASE: Duration = Duration::from_secs(30);
 const BACKOFF_MAX: Duration = Duration::from_secs(60 * 60);
 
-#[derive(Debug, Serialize)]
-struct SdrListUpdate<'a> {
-    id: &'a str,
-    name: &'a str,
-    antenna: &'a str,
+#[derive(Debug, Clone, Serialize)]
+struct SdrListUpdate {
+    id: String,
+    name: String,
+    antenna: String,
     bandwidth: i64,
     users: usize,
     center_frequency: i64,
-    grid_locator: &'a str,
-    hostname: &'a str,
+    grid_locator: String,
+    hostname: String,
     max_users: usize,
     port: u16,
+    software: String,
+    backend: String,
+    version: String,
+    receiver_count: usize,
+    receiver_id: String,
+    range_start_hz: i64,
+    range_end_hz: i64,
 }
 
 pub fn spawn(state: Arc<AppState>) {
@@ -43,8 +50,8 @@ pub fn spawn(state: Arc<AppState>) {
 
         let mut attempt: u32 = 0;
         while !shutdown::is_shutdown_requested() {
-            let payload = build_payload(&state, &id);
-            match send_update(&client, &url, payload).await {
+            let payloads = build_payloads(&state, &id);
+            match send_all_updates(&client, &url, &payloads).await {
                 Ok(()) => {
                     attempt = 0;
                     tokio::time::sleep(UPDATE_INTERVAL).await;
@@ -65,34 +72,56 @@ pub fn spawn(state: Arc<AppState>) {
     });
 }
 
-fn build_payload<'a>(state: &'a AppState, id: &'a str) -> SdrListUpdate<'a> {
+fn build_payloads(state: &AppState, id: &str) -> Vec<SdrListUpdate> {
     let cfg = &state.cfg;
-    let receiver = state.active_receiver_state();
-    let rt = receiver.rt.as_ref();
-    let input = &receiver.receiver.input;
+    let receiver_count = state
+        .receivers
+        .values()
+        .filter(|rx| rx.receiver.enabled)
+        .count()
+        .max(1);
 
-    let mut bandwidth = input.sps;
-    if rt.is_real {
-        bandwidth /= 2;
+    let mut enabled_receivers = state
+        .receivers
+        .values()
+        .filter(|rx| rx.receiver.enabled)
+        .collect::<Vec<_>>();
+    enabled_receivers.sort_by(|a, b| a.receiver.id.cmp(&b.receiver.id));
+
+    if enabled_receivers.is_empty() {
+        enabled_receivers.push(state.active_receiver_state());
     }
 
-    let mut center_frequency = input.frequency;
-    if center_frequency == 0 {
-        center_frequency = bandwidth / 2;
-    }
+    enabled_receivers
+        .into_iter()
+        .map(|receiver| {
+            let rt = receiver.rt.as_ref();
+            let range_start_hz = rt.basefreq;
+            let range_end_hz = rt.basefreq.saturating_add(rt.total_bandwidth);
+            let bandwidth = range_end_hz.saturating_sub(range_start_hz);
+            let center_frequency = range_start_hz.saturating_add(bandwidth / 2);
 
-    SdrListUpdate {
-        id,
-        name: cfg.websdr.name.as_str(),
-        antenna: cfg.websdr.antenna.as_str(),
-        bandwidth,
-        users: state.total_audio_clients(),
-        center_frequency,
-        grid_locator: cfg.websdr.grid_locator.as_str(),
-        hostname: cfg.websdr.hostname.as_str(),
-        max_users: cfg.limits.audio,
-        port: cfg.websdr.public_port.unwrap_or(cfg.server.port),
-    }
+            SdrListUpdate {
+                id: id.to_string(),
+                name: cfg.websdr.name.clone(),
+                antenna: cfg.websdr.antenna.clone(),
+                bandwidth,
+                users: receiver.audio_clients.len(),
+                center_frequency,
+                grid_locator: cfg.websdr.grid_locator.clone(),
+                hostname: cfg.websdr.hostname.clone(),
+                max_users: cfg.limits.audio,
+                port: cfg.websdr.public_port.unwrap_or(cfg.server.port),
+                software: "NovaSDR".to_string(),
+                backend: "novasdr-server".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                receiver_count,
+                receiver_id: receiver.receiver.id.clone(),
+                range_start_hz,
+                range_end_hz,
+            }
+        })
+        .collect()
 }
 
 fn build_client(url: &str) -> anyhow::Result<reqwest::Client> {
@@ -120,11 +149,11 @@ fn build_client(url: &str) -> anyhow::Result<reqwest::Client> {
 async fn send_update(
     client: &reqwest::Client,
     url: &str,
-    payload: SdrListUpdate<'_>,
+    payload: &SdrListUpdate,
 ) -> anyhow::Result<()> {
     let res = client
         .post(url)
-        .json(&payload)
+        .json(payload)
         .send()
         .await
         .context("POST update_websdr")?;
@@ -136,6 +165,17 @@ async fn send_update(
             .await
             .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
         anyhow::bail!("HTTP {status}: {body}");
+    }
+    Ok(())
+}
+
+async fn send_all_updates(
+    client: &reqwest::Client,
+    url: &str,
+    payloads: &[SdrListUpdate],
+) -> anyhow::Result<()> {
+    for payload in payloads {
+        send_update(client, url, payload).await?;
     }
     Ok(())
 }
